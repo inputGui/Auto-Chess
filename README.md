@@ -11,6 +11,7 @@ It works by taking screenshots, recognizing the position with a TensorFlow neura
 - **Fully automatic play** — detects the position, picks the best move, and plays it without any input from you.
 - **Opponent move detection** — continuously watches the board and reacts as soon as the opponent moves.
 - **Engine-powered** — uses any UCI-compatible engine (Stockfish 13 recommended) with adjustable thinking time.
+- **Adjustable Elo / playing strength** — cap the engine at a target Elo so it plays like a human of that rating instead of always finding the perfect move.
 - **Neural-network board recognition** — reads the board straight from the screen using a TensorFlow model, so no integration with the chess site is required.
 - **Plays as white or black** — just tell it which side you are.
 - **Auto-promotion handling** — automatically handles queen, knight, rook, and bishop promotions.
@@ -60,6 +61,7 @@ It works by taking screenshots, recognizing the position with a TensorFlow neura
 
 3. Answer the prompts:
    - Whether you want **legit mode** (`y`/`n`).
+   - The **Elo** the bot should play at (leave blank for full strength).
    - Whether you are playing as **white** or **black**.
 
 That's it — the bot will start playing for you and automatically respond to the opponent's moves.
@@ -71,6 +73,17 @@ You can tweak the behavior at the top of `Auto-Chess.py`:
 - `wait_interval` — the wait time between screenshots / retries.
 - `engine_path` — the absolute path to your engine executable.
 - `engine_think_time` — how long the engine thinks per move. Higher values play stronger but slower.
+- `engine_elo` — a default Elo to limit the engine's strength to (`None` = full strength). The startup prompt overrides this.
+
+### Playing strength (Elo)
+
+By default the engine plays at full strength and finds the best move every time — which is the biggest giveaway that you're using a bot. You can cap the playing strength to a target Elo so it plays like a human of that rating instead.
+
+On startup you'll be asked what Elo to play at; leave it blank for full strength. You can also set a default with the `engine_elo` variable at the top of `Auto-Chess.py`.
+
+This uses the engine's `UCI_LimitStrength` / `UCI_Elo` options, so it requires an engine that supports them (Stockfish does). The bot will tell you the supported Elo range for your engine and clamp your input to it. If your engine doesn't support strength limiting, it falls back to full strength with a warning.
+
+For the most convincing human-like play, combine a realistic Elo (move quality) with **legit mode** (human-like mouse movement).
 
 ### Legit mode
 
@@ -79,6 +92,8 @@ Legit mode is designed to make the automation harder to detect. Instead of insta
 - Moves the mouse along human-like, curved paths at randomized speeds.
 - Clicks slightly off-center rather than dead center on each piece.
 - Waits random intervals before playing.
+
+Pair it with a realistic **Elo** (see above) so the *moves* look human too, not just the mouse.
 
 The bot has been tested on **chess.com** and **lichess.org**, but should work on pretty much any chess site with a few tweaks.
 

@@ -56,8 +56,30 @@ def get_uci(board1, board2, who_moved):
 
 wait_interval = 0.3 # The wait time between taking screenshots and retrying commands
 engine_path = r"Engine Path" # The absolute path to the engine executable
-engine = chess.engine.SimpleEngine.popen_uci(engine_path)
 engine_think_time = 1 # <----- The higher this value is the better the engine plays, but also the slower it plays
+
+# The Elo the engine should play at. Set to None to always play at full strength.
+# You will also be asked for this on startup, which overrides the value set here.
+# Limiting the Elo makes the bot play like a human of that rating instead of always
+# finding the engine's best move. Combine it with legit mode for the most convincing,
+# human-like play (human Elo for move quality + human-like mouse movement).
+engine_elo = None
+
+
+def configure_elo(eng, elo):
+    """Limit the engine's playing strength to the given Elo, if the engine supports it."""
+    if elo is None:
+        return False
+    try:
+        eng.configure({"UCI_LimitStrength": True, "UCI_Elo": elo})
+        return True
+    except chess.engine.EngineError:
+        print("Warning: this engine doesn't support Elo limiting (UCI_Elo), "
+              "so it will play at full strength.")
+        return False
+
+
+engine = chess.engine.SimpleEngine.popen_uci(engine_path)
 
 os.chdir('chesstenso')
 while 1:
@@ -66,6 +88,27 @@ while 1:
         print("Please type y or n.")
         continue
     break
+
+elo_option = engine.options.get("UCI_Elo")
+while 1:
+    prompt = "What Elo should the bot play at? (leave blank for full strength"
+    if elo_option is not None:
+        prompt += f", supported: {elo_option.min}-{elo_option.max}"
+    elo_in = input(prompt + "): ").strip()
+    if elo_in == "":
+        engine_elo = None
+        break
+    if not elo_in.isdigit():
+        print("Please enter a whole number, or leave blank for full strength.")
+        continue
+    engine_elo = int(elo_in)
+    if elo_option is not None and (engine_elo < elo_option.min or engine_elo > elo_option.max):
+        print(f"This engine only supports an Elo between {elo_option.min} and {elo_option.max}.")
+        continue
+    break
+
+if configure_elo(engine, engine_elo):
+    print(f"Engine strength limited to ~{engine_elo} Elo.")
 while 1:
     who = input("Are you playing as white or black?: ")
     if who == "white":
@@ -132,6 +175,7 @@ while True:
             continue
         except chess.engine.EngineTerminatedError:
             engine = chess.engine.SimpleEngine.popen_uci(engine_path)
+            configure_elo(engine, engine_elo)
             continue
     print(f"Detected board position with {round(accuracy, 2)}% confidence:")
     print(board)
