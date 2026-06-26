@@ -55,15 +55,37 @@ def get_uci(board1, board2, who_moved):
     return move
 
 wait_interval = 0.3 # The wait time between taking screenshots and retrying commands
-engine_path = r"Engine Path" # The absolute path to the engine executable
-engine_think_time = 1 # <----- The higher this value is the better the engine plays, but also the slower it plays
 
-# The Elo the engine should play at. Set to None to always play at full strength.
-# You will also be asked for this on startup, which overrides the value set here.
-# Limiting the Elo makes the bot play like a human of that rating instead of always
-# finding the engine's best move. Combine it with legit mode for the most convincing,
-# human-like play (human Elo for move quality + human-like mouse movement).
+# --- Stockfish (the engine that double-checks Maia for blunders) ---
+stockfish_path = r"Stockfish Path" # The absolute path to the Stockfish (or other UCI) engine
+engine_think_time = 1 # <----- The higher this value is the better/slower Stockfish plays and checks
+
+# The Elo Stockfish should play at, used only in "Stockfish only" mode. Set to None for full
+# strength. You are also asked for this on startup, which overrides the value set here.
 engine_elo = None
+
+# --- Maia (the human-like ML engine) ---
+# Maia is a neural network trained on millions of real human games; it predicts the move a human
+# of a given rating would actually play instead of the objectively best move. It runs inside lc0.
+# Download the weights (maia-1100.pb.gz ... maia-1900.pb.gz) from:
+#   https://github.com/CSSLab/maia-chess/tree/master/maia_weights
+lc0_path = r"Lc0 Path" # The absolute path to the lc0 executable
+maia_weights_dir = r"Maia Weights Dir" # Folder containing the maia-XXXX.pb.gz weight files
+maia_rating = 1500 # Which Maia model to use (1100-1900 in steps of 100). Asked for on startup.
+
+# In "Maia + Stockfish" mode, Stockfish overrides Maia's move only when Maia's choice loses at
+# least this many centipawns versus Stockfish's best move. This stops obvious blunders while still
+# letting Maia play the human-like, slightly sub-optimal moves that make it look human.
+blunder_threshold = 150
+
+# Resolve paths to absolute now, because we chdir into ./chesstenso below.
+stockfish_path = os.path.abspath(stockfish_path) if os.path.exists(stockfish_path) else stockfish_path
+lc0_path = os.path.abspath(lc0_path) if os.path.exists(lc0_path) else lc0_path
+maia_weights_dir = os.path.abspath(maia_weights_dir) if os.path.exists(maia_weights_dir) else maia_weights_dir
+
+mode = "maia_sf"   # one of: "maia_sf", "maia", "stockfish"
+stockfish = None   # the Stockfish engine handle
+maia = None        # the Maia (lc0) engine handle
 
 
 def configure_elo(eng, elo):
@@ -79,7 +101,61 @@ def configure_elo(eng, elo):
         return False
 
 
-engine = chess.engine.SimpleEngine.popen_uci(engine_path)
+def open_stockfish():
+    return chess.engine.SimpleEngine.popen_uci(stockfish_path)
+
+
+def open_maia(rating):
+    weights = os.path.join(maia_weights_dir, f"maia-{rating}.pb.gz")
+    return chess.engine.SimpleEngine.popen_uci([lc0_path, f"--weights={weights}"])
+
+
+def reopen_engines():
+    """(Re)start whichever engines the current mode needs. Used at startup and after a crash."""
+    global stockfish, maia
+    if mode in ("maia_sf", "maia"):
+        maia = open_maia(maia_rating)
+    if mode in ("maia_sf", "stockfish"):
+        stockfish = open_stockfish()
+        if mode == "stockfish":
+            configure_elo(stockfish, engine_elo)
+
+
+def cp(score, color):
+    """Centipawns of a PovScore from `color`'s point of view (mate counts as +/-100000)."""
+    return score.pov(color).score(mate_score=100000)
+
+
+def pick_move(board):
+    """Choose the move to play according to the selected engine mode."""
+    if mode == "stockfish":
+        return stockfish.play(board, chess.engine.Limit(time=engine_think_time)).move
+
+    # Maia picks a human-like move from a single policy evaluation (no search).
+    maia_move = maia.play(board, chess.engine.Limit(nodes=1)).move
+    if mode == "maia":
+        return maia_move
+
+    # Maia + Stockfish: let Stockfish veto the move only if it is a genuine blunder.
+    me = board.turn
+    best = stockfish.play(board, chess.engine.Limit(time=engine_think_time),
+                          info=chess.engine.INFO_SCORE)
+    best_move, best_cp = best.move, cp(best.info["score"], me)
+    if maia_move == best_move:
+        return maia_move
+    board.push(maia_move)
+    try:
+        if board.is_checkmate():  # Maia found a mate; nothing to second-guess.
+            return maia_move
+        maia_cp = cp(stockfish.analyse(board, chess.engine.Limit(time=engine_think_time))["score"], me)
+    finally:
+        board.pop()
+    if best_cp - maia_cp >= blunder_threshold:
+        print(f"Stockfish veto: Maia's {maia_move} drops {best_cp - maia_cp}cp, "
+              f"playing {best_move} instead.")
+        return best_move
+    return maia_move
+
 
 os.chdir('chesstenso')
 while 1:
@@ -89,26 +165,60 @@ while 1:
         continue
     break
 
-elo_option = engine.options.get("UCI_Elo")
 while 1:
-    prompt = "What Elo should the bot play at? (leave blank for full strength"
-    if elo_option is not None:
-        prompt += f", supported: {elo_option.min}-{elo_option.max}"
-    elo_in = input(prompt + "): ").strip()
-    if elo_in == "":
-        engine_elo = None
-        break
-    if not elo_in.isdigit():
-        print("Please enter a whole number, or leave blank for full strength.")
-        continue
-    engine_elo = int(elo_in)
-    if elo_option is not None and (engine_elo < elo_option.min or engine_elo > elo_option.max):
-        print(f"This engine only supports an Elo between {elo_option.min} and {elo_option.max}.")
+    print("Which engine mode?")
+    print("  1) Maia + Stockfish double-check (human-like moves, blunders vetoed) [recommended]")
+    print("  2) Maia only (pure human-like play)")
+    print("  3) Stockfish only (max strength, optional Elo cap)")
+    choice = input("Choose 1, 2 or 3: ").strip()
+    if choice == "1":
+        mode = "maia_sf"
+    elif choice == "2":
+        mode = "maia"
+    elif choice == "3":
+        mode = "stockfish"
+    else:
+        print("Please type 1, 2 or 3.")
         continue
     break
 
-if configure_elo(engine, engine_elo):
-    print(f"Engine strength limited to ~{engine_elo} Elo.")
+if mode in ("maia_sf", "maia"):
+    while 1:
+        rating_in = input("Which Maia rating? (1100-1900 in steps of 100, blank for 1500): ").strip()
+        if rating_in == "":
+            maia_rating = 1500
+            break
+        if not rating_in.isdigit():
+            print("Please enter a number like 1100, 1500 or 1900.")
+            continue
+        maia_rating = int(rating_in)
+        if maia_rating < 1100 or maia_rating > 1900 or maia_rating % 100 != 0:
+            print("Maia only has models for 1100, 1200, ... 1900.")
+            continue
+        break
+
+reopen_engines()
+
+if mode == "stockfish":
+    elo_option = stockfish.options.get("UCI_Elo")
+    while 1:
+        prompt = "What Elo should the bot play at? (leave blank for full strength"
+        if elo_option is not None:
+            prompt += f", supported: {elo_option.min}-{elo_option.max}"
+        elo_in = input(prompt + "): ").strip()
+        if elo_in == "":
+            engine_elo = None
+            break
+        if not elo_in.isdigit():
+            print("Please enter a whole number, or leave blank for full strength.")
+            continue
+        engine_elo = int(elo_in)
+        if elo_option is not None and (engine_elo < elo_option.min or engine_elo > elo_option.max):
+            print(f"This engine only supports an Elo between {elo_option.min} and {elo_option.max}.")
+            continue
+        break
+    if configure_elo(stockfish, engine_elo):
+        print(f"Engine strength limited to ~{engine_elo} Elo.")
 while 1:
     who = input("Are you playing as white or black?: ")
     if who == "white":
@@ -169,21 +279,19 @@ while True:
 
     while 1:
         try:
-            result = engine.play(board, chess.engine.Limit(time=engine_think_time))
+            move = pick_move(board)
             break
         except asyncio.exceptions.TimeoutError:
             continue
         except chess.engine.EngineTerminatedError:
-            engine = chess.engine.SimpleEngine.popen_uci(engine_path)
-            configure_elo(engine, engine_elo)
+            reopen_engines()
             continue
     print(f"Detected board position with {round(accuracy, 2)}% confidence:")
     print(board)
-    print("Playing Move: " + str(result.move))
+    print("Playing Move: " + str(move))
     print()
-    move = result.move
     try:
-        board.push(result.move)
+        board.push(move)
         prev_fen = str(board.fen().split(" ")[0])
     except:
         print("Looks like I got checkmated, how is that even possible?")
