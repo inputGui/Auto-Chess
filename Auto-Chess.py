@@ -297,7 +297,20 @@ while True:
         print("Looks like I got checkmated, how is that even possible?")
         break
 
-    board_pos = chessboard_finder.main(url=os.path.abspath('board.png'))
+    board_pos = None
+    finder_invalid = 0
+    while board_pos is None:
+        image = pyscreenshot.grab()
+        image.save("board.png")
+        board_pos = chessboard_finder.main(url=os.path.abspath('board.png'))
+        if board_pos is None:
+            finder_invalid += 1
+            if finder_invalid >= 10:
+                print("Unable to locate the chessboard on screen to play the move. Stopping.")
+                break
+            time.sleep(wait_interval)
+    if board_pos is None:
+        break
 
     board_width = board_pos[2] - board_pos[0]
     board_height = board_pos[3] - board_pos[1]
