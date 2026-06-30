@@ -145,7 +145,7 @@ def pick_move(board):
         return maia_move
     board.push(maia_move)
     try:
-        if board.is_checkmate():  # Maia found a mate; nothing to second-guess.
+        if board.is_game_over():  # Maia ended the game (mate, stalemate, ...); nothing to second-guess.
             return maia_move
         maia_cp = cp(stockfish.analyse(board, chess.engine.Limit(time=engine_think_time))["score"], me)
     finally:
